@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
@@ -239,6 +239,19 @@ class SchedulerOutput:
     # The worker zeros the corresponding GPU memory before the blocks are used,
     # preventing stale NaN/data from corrupting attention or SSM computation.
     new_block_ids_to_zero: list[int] | None = None
+
+    # --- dllm-plugin / Phase 4 (optional): precomputed structured-output bitmask
+    # for workers that consume drafts as fixed-size dLLM blocks (mutually
+    # exclusive with vanilla speculative decoding). Populated by DllmRuntimeScheduler.
+    dllm_grammar_output: Any = None
+    #: req_id -> flat row index into dllm_grammar_output.grammar_bitmask for the
+    # frontier mask row (invalid-token repair position).
+    dllm_so_frontier_flat_indices: dict[str, int] | None = None
+    #: req_id -> block row index (0..draft_size-1) for frontier masking, or None
+    # when every in-block token is grammar-valid under validate_tokens().
+    dllm_so_frontier_block_rows: dict[str, int | None] | None = None
+    #: req_id -> len(grammar validate_tokens prefix) used for repair-budget hints.
+    dllm_so_valid_prefix_lens: dict[str, int] | None = None
 
     @classmethod
     def make_empty(cls) -> "SchedulerOutput":

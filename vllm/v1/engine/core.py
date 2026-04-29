@@ -412,7 +412,9 @@ class EngineCore:
             return {}, False
         scheduler_output = self.scheduler.schedule()
         future = self.model_executor.execute_model(scheduler_output, non_block=True)
-        grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
+        grammar_output = scheduler_output.dllm_grammar_output
+        if grammar_output is None:
+            grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
         with (
             self.log_error_detail(scheduler_output),
             self.log_iteration_details(scheduler_output),
@@ -434,8 +436,9 @@ class EngineCore:
         # When using async scheduling we can't get draft token ids in advance,
         # so we update draft token ids in the worker process and don't
         # need to update draft token ids here.
-        if not self.async_scheduling and self.use_spec_decode and model_executed:
-            # Take the draft token ids.
+        if not self.async_scheduling and model_executed:
+            # Take draft token ids from the worker when provided (spec decoding,
+            # dLLM plugin blocks, etc.). Workers return None when unsupported.
             draft_token_ids = self.model_executor.take_draft_token_ids()
             if draft_token_ids is not None:
                 self.scheduler.update_draft_token_ids(draft_token_ids)
@@ -483,9 +486,11 @@ class EngineCore:
                 if not scheduler_output.pending_structured_output_tokens:
                     # We aren't waiting for any tokens, get any grammar output
                     # and sample immediately.
-                    grammar_output = self.scheduler.get_grammar_bitmask(
-                        scheduler_output
-                    )
+                    grammar_output = scheduler_output.dllm_grammar_output
+                    if grammar_output is None:
+                        grammar_output = self.scheduler.get_grammar_bitmask(
+                            scheduler_output
+                        )
                     future = self.model_executor.sample_tokens(
                         grammar_output, non_block=True
                     )
@@ -536,23 +541,21 @@ class EngineCore:
         # in a field and do it immediately once step_with_batch_queue is
         # re-called. The latter slightly favors TTFT over TPOT/throughput.
         if deferred_scheduler_output:
-            # If we are doing speculative decoding with structured output,
-            # we need to get the draft token ids from the prior step before
-            # we can compute the grammar bitmask for the deferred request.
-            if self.use_spec_decode:
-                draft_token_ids = self.model_executor.take_draft_token_ids()
-                assert draft_token_ids is not None
-                # Update the draft token ids in the scheduler output to
-                # filter out the invalid spec tokens, which will be padded
-                # with -1 and skipped by the grammar bitmask computation.
+            # Draft token ids from the prior worker step may be required before the
+            # grammar bitmask can be computed (spec decoding + structured output,
+            # and dLLM plugin fixed-size draft blocks).
+            draft_token_ids = self.model_executor.take_draft_token_ids()
+            if draft_token_ids is not None:
                 self.scheduler.update_draft_token_ids_in_output(
                     draft_token_ids, deferred_scheduler_output
                 )
             # We now have the tokens needed to compute the bitmask for the
             # deferred request. Get the bitmask and call sample tokens.
-            grammar_output = self.scheduler.get_grammar_bitmask(
-                deferred_scheduler_output
-            )
+            grammar_output = deferred_scheduler_output.dllm_grammar_output
+            if grammar_output is None:
+                grammar_output = self.scheduler.get_grammar_bitmask(
+                    deferred_scheduler_output
+                )
             future = self.model_executor.sample_tokens(grammar_output, non_block=True)
             batch_queue.appendleft((future, deferred_scheduler_output, exec_future))
 

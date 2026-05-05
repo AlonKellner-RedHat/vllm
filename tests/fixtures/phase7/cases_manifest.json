@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "CASE-001",
+      "purpose": "profile validation",
+      "seed": 7
+    },
+    {
+      "id": "CASE-002",
+      "purpose": "mapping conformance",
+      "seed": 11
+    },
+    {
+      "id": "CASE-003",
+      "purpose": "forward runtime compatibility",
+      "seed": 13
+    },
+    {
+      "id": "CASE-004",
+      "purpose": "attention semantics",
+      "seed": 17
+    },
+    {
+      "id": "CASE-005",
+      "purpose": "fallback behavior",
+      "seed": 19
+    },
+    {
+      "id": "CASE-006",
+      "purpose": "docs/runtime contract completeness",
+      "seed": 23
+    }
+  ]
+}

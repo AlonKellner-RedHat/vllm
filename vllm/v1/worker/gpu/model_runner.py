@@ -167,8 +167,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.use_aux_hidden_state_outputs = False
         if self.speculative_config is not None:
             self.num_speculative_steps = self.speculative_config.num_speculative_tokens
-        elif self.vllm_config.diffusion_config is not None:
-            self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
 
             if self.is_last_pp_rank:
                 self.speculator = init_speculator(self.vllm_config, self.device)
@@ -178,6 +176,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 self.use_aux_hidden_state_outputs = True
                 if self.use_pp:
                     raise ValueError("EAGLE3 with pipeline parallel is not supported.")
+        elif self.vllm_config.diffusion_config is not None:
+            self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
 
         # Draft tokens propagation - for spec-dec + struct outputs.
         self.draft_tokens_handler = DraftTokensHandler(self.device)

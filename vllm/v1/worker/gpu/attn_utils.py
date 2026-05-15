@@ -252,6 +252,7 @@ def build_attn_metadata(
     dcp_local_seq_lens: torch.Tensor | None = None,
     encoder_seq_lens: dict[int, tuple[torch.Tensor, np.ndarray]] | None = None,
     positions: torch.Tensor | None = None,
+    causal: bool = True,
 ) -> dict[str, Any]:
     seq_lens = seq_lens[:num_reqs]
     if dcp_local_seq_lens is not None:

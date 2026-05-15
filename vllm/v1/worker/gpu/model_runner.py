@@ -167,6 +167,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.use_aux_hidden_state_outputs = False
         if self.speculative_config is not None:
             self.num_speculative_steps = self.speculative_config.num_speculative_tokens
+        elif self.vllm_config.diffusion_config is not None:
+            self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
 
             if self.is_last_pp_rank:
                 self.speculator = init_speculator(self.vllm_config, self.device)

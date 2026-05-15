@@ -57,6 +57,22 @@ class ModelState(ABC):
     def prepare_dummy_inputs(self, num_reqs: int, num_tokens: int) -> dict[str, Any]:
         raise NotImplementedError
 
+    def remove_request(self, req_id: str) -> None:
+        """Clean up per-request state when a request finishes or aborts."""
+        return None
+
+    def custom_sampler(
+        self,
+        sampler: Any,
+        config: Any,
+    ) -> tuple[Any, Any] | None:
+        """Wrap or replace the default sampler.
+
+        Called after model loading. Return None to keep defaults,
+        or (sampler, rejection_sampler | None) to override.
+        """
+        return None
+
     @abstractmethod
     def prepare_attn(
         self,

@@ -304,6 +304,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.model_state = init_model_state(
             self.vllm_config, self.model, self.encoder_cache, self.device
         )
+
+        # Allow ModelState to wrap or replace the sampler (e.g. diffusion)
+        if self.sampler is not None:
+            custom = self.model_state.custom_sampler(
+                self.sampler, self.vllm_config)
+            if custom is not None:
+                self.sampler, self.rejection_sampler = custom
+
         if self.is_pooling_model and self.is_last_pp_rank:
             self.pooling_runner = PoolingRunner(self.model)
         eplb_models_added |= self.eplb.maybe_register_model(
@@ -626,6 +634,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if self.prompt_logprobs_worker is not None:
             self.prompt_logprobs_worker.remove_request(req_id)
         self.lora_state.remove_request(req_id)
+        self.model_state.remove_request(req_id)
         return True
 
     def finish_requests(self, scheduler_output: SchedulerOutput) -> None:

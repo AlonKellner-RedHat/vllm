@@ -73,6 +73,32 @@ class ModelState(ABC):
         """
         return None
 
+    def before_step(
+        self,
+        scheduler_output: Any,
+        dummy_run: bool = False,
+    ) -> None:
+        """Extract per-step metadata from scheduler output before forward pass."""
+        return None
+
+    def custom_sample(
+        self,
+        logits: torch.Tensor,
+        input_batch: InputBatch,
+        req_states: RequestState,
+    ) -> tuple[Any, torch.Tensor, torch.Tensor] | None:
+        """Override sampling with custom logic (e.g. diffusion remasking).
+
+        Called after logits computation and grammar bitmask application.
+        Return None to use stock sampler, or (SamplerOutput, num_sampled,
+        num_rejected) to override.
+        """
+        return None
+
+    def take_draft_token_ids(self) -> Any | None:
+        """Produce next-step draft token IDs (e.g. for block diffusion)."""
+        return None
+
     @abstractmethod
     def prepare_attn(
         self,

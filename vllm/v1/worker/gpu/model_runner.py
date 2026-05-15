@@ -898,6 +898,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 grammar_output.grammar_bitmask,
             )
 
+        custom_result = self.model_state.custom_sample(
+            logits, input_batch, self.req_states)
+        if custom_result is not None:
+            return custom_result
+
         if input_batch.num_draft_tokens == 0:
             # No draft tokens (common case).
             assert self.sampler is not None
@@ -971,6 +976,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         skip_attn_for_dummy_run: bool = False,
         is_profile: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        self.model_state.before_step(scheduler_output, dummy_run=dummy_run)
+
         if not dummy_run:
             # Update the request states.
             self.finish_requests(scheduler_output)
@@ -1282,6 +1289,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         return async_output.get_output()
 
     def take_draft_token_ids(self) -> DraftTokenIds | None:
+        custom = self.model_state.take_draft_token_ids()
+        if custom is not None:
+            return custom
         return self.draft_tokens_handler.get_draft_tokens()
 
     @torch.inference_mode()

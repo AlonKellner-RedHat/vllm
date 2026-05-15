@@ -733,6 +733,16 @@ class VllmConfig:
                     and getattr(self.attention_config, 'use_non_causal', False)):
                 self.model_config._use_non_causal = True
 
+            # Auto-detect diffusion models and set DiffusionConfig
+            if self.diffusion_config is None:
+                hf_config = getattr(self.model_config, "hf_config", None)
+                if hf_config is not None:
+                    archs = set(getattr(hf_config, "architectures", []) or [])
+                    if archs.intersection(
+                        {"LLaDA2ForCausalLM", "LLaDA2MoeModelLM"}
+                    ):
+                        self.diffusion_config = DiffusionConfig()
+
             self.parallel_config.is_moe_model = self.model_config.is_moe
 
         if self.lora_config is not None:

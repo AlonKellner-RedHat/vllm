@@ -742,6 +742,11 @@ class VllmConfig:
                         {"LLaDA2ForCausalLM", "LLaDA2MoeModelLM"}
                     ):
                         self.diffusion_config = DiffusionConfig()
+                        logger.info(
+                            "Auto-detected diffusion model (archs=%s), "
+                            "set DiffusionConfig(canvas_length=%d)",
+                            archs, self.diffusion_config.canvas_length,
+                        )
 
             self.parallel_config.is_moe_model = self.model_config.is_moe
 

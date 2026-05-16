@@ -726,6 +726,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
+        bonus = self.model_state.num_bonus_tokens
         if not draft_tokens:
             # No draft token scheduled (common case).
             total_num_draft_tokens = 0
@@ -745,9 +746,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 count=num_reqs,
             )
             total_num_draft_tokens = int(num_draft_tokens.sum())
-            total_num_logits = num_reqs + total_num_draft_tokens
+            total_num_logits = num_reqs * bonus + total_num_draft_tokens
 
-            num_logits = num_draft_tokens + 1
+            num_logits = num_draft_tokens + bonus
             cu_num_logits_np = np.empty(num_reqs + 1, dtype=np.int32)
             cu_num_logits_np[0] = 0
             np.cumsum(num_logits, out=cu_num_logits_np[1:])
@@ -818,6 +819,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.req_states.draft_tokens,
             cu_num_logits,
             total_num_logits,
+            num_bonus_tokens=bonus,
         )
 
         # CPU upper bound on seq_lens; padded entries left at zero.

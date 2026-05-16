@@ -900,23 +900,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 grammar_output.grammar_bitmask,
             )
 
-        custom_result = self.model_state.custom_sample(
-            logits, input_batch, self.req_states)
-        if custom_result is not None:
-            return custom_result
-
-        if input_batch.num_draft_tokens == 0:
-            # No draft tokens (common case).
+        if input_batch.num_draft_tokens == 0 or self.rejection_sampler is None:
             assert self.sampler is not None
             sampler_output = self.sampler(logits, input_batch)
         else:
-            # Rejection sampling for spec decoding.
-            assert self.rejection_sampler is not None
             assert self.speculator is not None
             sampler_output = self.rejection_sampler(
                 logits,
                 input_batch,
-                # Draft logits are needed for probabilistic rejection sampling.
                 self.speculator.draft_logits,
             )
 

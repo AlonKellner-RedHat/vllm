@@ -99,6 +99,15 @@ class ModelState(ABC):
         """Produce next-step draft token IDs (e.g. for block diffusion)."""
         return None
 
+    @property
+    def num_bonus_tokens(self) -> int:
+        """Number of bonus tokens prepended to draft sequences.
+
+        AR models return 1 (last_sampled_token prepended by combine kernel).
+        Diffusion models return 0 (canvas IS the full input).
+        """
+        return 1
+
     @abstractmethod
     def prepare_attn(
         self,

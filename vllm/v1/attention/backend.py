@@ -414,6 +414,9 @@ class CommonAttentionMetadata:
 
     _num_computed_tokens_cache: torch.Tensor | None = None
 
+    dllm_prefix_lengths: list[int] | None = None
+    """Per-request prefix lengths for block diffusion virtual batch attention."""
+
     def batch_size(self) -> int:
         return self.seq_lens.shape[0]
 

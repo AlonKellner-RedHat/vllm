@@ -726,7 +726,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
-        bonus = self.model_state.num_bonus_tokens
+        bonus = 1  # Always 1 until NUM_BONUS_TOKENS kernel is fully validated
         if not draft_tokens:
             # No draft token scheduled (common case).
             total_num_draft_tokens = 0

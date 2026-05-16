@@ -179,9 +179,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         elif self.vllm_config.diffusion_config is not None:
             self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
 
+        self._num_bonus_tokens = 0 if self.vllm_config.diffusion_config is not None else 1
+
         # Draft tokens propagation - for spec-dec + struct outputs.
         self.draft_tokens_handler = DraftTokensHandler(self.device)
-        self.uniform_decode_query_len = 1 + self.num_speculative_steps
+        self.uniform_decode_query_len = self._num_bonus_tokens + self.num_speculative_steps
 
         # Pooling models.
         self.is_pooling_model = self.model_config.runner_type == "pooling"
@@ -216,7 +218,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 device=self.device,
                 req_states=self.req_states,
                 logprobs_mode=self.model_config.logprobs_mode,
-                num_speculative_tokens=self.num_speculative_steps + 1,
+                num_speculative_tokens=self.num_speculative_steps + self._num_bonus_tokens,
             )
             if self.speculative_config is not None:
                 self.rejection_sampler = RejectionSampler(
@@ -226,13 +228,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 )
             self.prompt_logprobs_worker = PromptLogprobsWorker(self.max_num_reqs)
             self.structured_outputs_worker = StructuredOutputsWorker(
-                max_num_logits=self.max_num_reqs * (self.num_speculative_steps + 1),
+                max_num_logits=self.max_num_reqs * (self.num_speculative_steps + self._num_bonus_tokens),
                 vocab_size=self.vocab_size,
                 device=self.device,
             )
 
         # For CUDA graphs, and will init cudagraph_manager after init_attn_backend.
-        self.decode_query_len = self.num_speculative_steps + 1
+        self.decode_query_len = self.num_speculative_steps + self._num_bonus_tokens
         self.cudagraph_manager: ModelCudaGraphManager | None = None
         # LoRA-related workers.
         self.lora_state = LoraState(max_num_reqs=self.max_num_reqs)
@@ -726,7 +728,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
-        bonus = 1  # Always 1 until NUM_BONUS_TOKENS kernel is fully validated
+        bonus = self._num_bonus_tokens
         if not draft_tokens:
             # No draft token scheduled (common case).
             total_num_draft_tokens = 0
@@ -754,7 +756,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             np.cumsum(num_logits, out=cu_num_logits_np[1:])
             cu_num_logits = async_copy_to_gpu(cu_num_logits_np, device=self.device)
 
-            max_expand_len = self.num_speculative_steps + 1
+            max_expand_len = self.num_speculative_steps + bonus
             expanded_idx_mapping, expanded_local_pos = expand_idx_mapping(
                 idx_mapping, total_num_logits, cu_num_logits, max_expand_len
             )

@@ -277,7 +277,7 @@ def build_attn_metadata(
             max_query_len=max_query_len,
             block_table_tensor=block_table,
             slot_mapping=slot_mapping,
-            causal=True,
+            causal=causal,
             dcp_local_seq_lens=dcp_local_seq_lens,
             positions=positions,
         )

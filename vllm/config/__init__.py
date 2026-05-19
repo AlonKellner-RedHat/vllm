@@ -3,6 +3,7 @@
 
 from vllm.config.attention import AttentionConfig
 from vllm.config.cache import CacheConfig
+from vllm.config.diffusion import DiffusionConfig
 from vllm.config.compilation import (
     CompilationConfig,
     CompilationMode,

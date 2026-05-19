@@ -289,6 +289,7 @@ def _combine_sampled_and_draft_tokens_kernel(
     cu_num_logits_ptr,
     logits_indices_ptr,
     BLOCK_SIZE: tl.constexpr,
+    NUM_BONUS_TOKENS: tl.constexpr = 1,
 ):
     batch_idx = tl.program_id(0)
     req_state_idx = tl.load(idx_mapping_ptr + batch_idx)
@@ -297,7 +298,7 @@ def _combine_sampled_and_draft_tokens_kernel(
     cu_num_logits_start = tl.load(cu_num_logits_ptr + batch_idx)
     cu_num_logits_end = tl.load(cu_num_logits_ptr + batch_idx + 1)
     num_logits = cu_num_logits_end - cu_num_logits_start
-    num_draft_tokens = num_logits - 1
+    num_draft_tokens = num_logits - NUM_BONUS_TOKENS
 
     # Compute the logits indices.
     block = tl.arange(0, BLOCK_SIZE)
@@ -312,12 +313,12 @@ def _combine_sampled_and_draft_tokens_kernel(
     seq_len = tl.load(seq_lens_ptr + batch_idx)
     prefill_len = tl.load(prefill_len_ptr + req_state_idx)
     if seq_len <= prefill_len:
-        # Handling prefill tokens. No sampled or draft tokens.
         return
 
-    # Write the last sampled token ID to input_ids.
-    last_token_id = tl.load(last_sampled_tokens_ptr + req_state_idx)
-    tl.store(input_ids_ptr + query_end - num_logits, last_token_id)
+    if NUM_BONUS_TOKENS > 0:
+        # Write the last sampled token ID to input_ids (bonus token).
+        last_token_id = tl.load(last_sampled_tokens_ptr + req_state_idx)
+        tl.store(input_ids_ptr + query_end - num_logits, last_token_id)
 
     # Write the draft tokens (if any) to input_ids.
     if num_draft_tokens > 0:
@@ -343,6 +344,7 @@ def combine_sampled_and_draft_tokens(
     draft_tokens: torch.Tensor,
     cu_num_logits: torch.Tensor,
     num_logits: int,
+    num_bonus_tokens: int = 1,
 ) -> torch.Tensor:
     # use idx_mapping.shape[0] for actual request count
     num_reqs = idx_mapping.shape[0]
@@ -364,9 +366,8 @@ def combine_sampled_and_draft_tokens(
         draft_tokens.stride(0),
         cu_num_logits,
         logits_indices,
-        # NOTE(woosuk): Add 1 to ensure the block can cover the last sampled token
-        # in addition to all draft tokens.
         BLOCK_SIZE=triton.next_power_of_2(num_speculative_steps + 1),
+        NUM_BONUS_TOKENS=num_bonus_tokens,
     )
     return logits_indices
 

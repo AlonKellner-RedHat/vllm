@@ -841,6 +841,10 @@ class VllmConfig:
         executor_class = Executor.get_class(self)
         executor_supports_async_sched = executor_class.supports_async_scheduling()
 
+        if getattr(self, "diffusion_config", None) is not None:
+            self.scheduler_config.async_scheduling = False
+
+
         if self.scheduler_config.async_scheduling:
             # Async scheduling explicitly enabled, hard fail any incompatibilities.
             # Currently, async scheduling only support eagle speculative

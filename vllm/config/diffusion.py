@@ -29,4 +29,4 @@ class DiffusionConfig:
     @property
     def num_speculative_tokens(self) -> int:
         """Draft length maps to spec-decode buffer size."""
-        return self.draft_length
+        return self.draft_length - 1

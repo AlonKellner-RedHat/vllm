@@ -182,7 +182,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         elif self.vllm_config.diffusion_config is not None:
             self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
 
-        self._num_bonus_tokens = 0 if self.vllm_config.diffusion_config is not None else 1
+        self._num_bonus_tokens = 1
 
         # Draft tokens propagation - for spec-dec + struct outputs.
         self.draft_tokens_handler = DraftTokensHandler(self.device)

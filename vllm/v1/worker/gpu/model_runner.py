@@ -698,14 +698,24 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.sampler.apply_staged_writes()
 
     def update_requests(self, scheduler_output: SchedulerOutput) -> None:
-        # Add new blocks for the existing requests.
+        # Add new blocks and propagate authoritative nct from scheduler.
         reqs = scheduler_output.scheduled_cached_reqs
-        for req_new_block_ids, req_id in zip(reqs.new_block_ids, reqs.req_ids):
+        num_computed_tokens_np = self.req_states.num_computed_tokens_np
+        for req_id, num_computed_tokens, req_new_block_ids in zip(
+            reqs.req_ids, reqs.num_computed_tokens, reqs.new_block_ids,
+        ):
+            req_index = self.req_states.req_id_to_index[req_id]
+            num_computed_tokens_np[req_index] = num_computed_tokens
             if req_new_block_ids is not None:
-                req_index = self.req_states.req_id_to_index[req_id]
                 self.block_tables.append_block_ids(
                     req_index, req_new_block_ids, overwrite=False
                 )
+        # Update prefill tracking from authoritative nct.
+        np.minimum(
+            num_computed_tokens_np,
+            self.req_states.prefill_len.np,
+            out=self.req_states.num_computed_prefill_tokens,
+        )
 
     def prepare_inputs(
         self, scheduler_output: SchedulerOutput, batch_desc: BatchExecutionDescriptor
@@ -921,6 +931,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             input_batch.cu_num_logits,
             input_batch.idx_mapping,
             self.req_states.prefill_len.gpu,
+            input_batch.query_start_loc,
         )
         return sampler_output, num_sampled, num_rejected
 
@@ -950,17 +961,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.req_states.total_len.gpu,
         )
 
-        # Update the number of computed prefill tokens.
-        idx_mapping_np = input_batch.idx_mapping_np
-        computed_prefill = self.req_states.num_computed_prefill_tokens
-        computed_prefill[idx_mapping_np] += input_batch.num_scheduled_tokens
-        np.minimum(
-            computed_prefill, self.req_states.prefill_len.np, out=computed_prefill
-        )
-        # Advance the CPU mirror optimistically (assume all scheduled accepted).
-        self.req_states.num_computed_tokens_np[idx_mapping_np] += (
-            input_batch.num_scheduled_tokens
-        )
+        # CPU mirror nct is now set authoritatively in update_requests()
+        # from the scheduler's value. No optimistic increment needed here.
 
     @torch.inference_mode()
     def execute_model(
@@ -1278,6 +1280,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
             self.draft_tokens_handler.set_draft_tokens(input_batch, draft_tokens)
+        elif self.num_speculative_steps > 0 and self.use_async_scheduling:
+            # dLLM: no speculator but has spec tokens. Populate the
+            # draft_tokens_handler so the async scheduler can read
+            # draft token counts for scheduling.
+            self.draft_tokens_handler.req_ids = list(input_batch.req_ids)
+            self.draft_tokens_handler.num_draft_tokens = self.num_speculative_steps
 
         if self.use_async_scheduling:
             return async_output
@@ -1337,17 +1345,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             input_batch.query_start_loc,
         )
 
-        # Update the number of computed prefill tokens.
-        idx_mapping_np = input_batch.idx_mapping_np
-        computed_prefill = self.req_states.num_computed_prefill_tokens
-        computed_prefill[idx_mapping_np] += input_batch.num_scheduled_tokens
-        np.minimum(
-            computed_prefill, self.req_states.prefill_len.np, out=computed_prefill
-        )
-        # Advance the CPU mirror optimistically (assume all scheduled accepted).
-        self.req_states.num_computed_tokens_np[idx_mapping_np] += (
-            input_batch.num_scheduled_tokens
-        )
+        # CPU mirror nct is now set authoritatively in update_requests()
+        # from the scheduler's value. No optimistic increment needed here.
 
     ########### EPLB methods start ###########
     @property

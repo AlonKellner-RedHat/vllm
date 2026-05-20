@@ -373,6 +373,7 @@ def _get_num_sampled_and_rejected_kernel(
     cu_num_logits_ptr,
     idx_mapping_ptr,
     prefill_len_ptr,
+    query_start_loc_ptr,
 ):
     batch_idx = tl.program_id(0)
     req_state_idx = tl.load(idx_mapping_ptr + batch_idx)
@@ -389,7 +390,17 @@ def _get_num_sampled_and_rejected_kernel(
     logits_end = tl.load(cu_num_logits_ptr + batch_idx + 1)
     num_logits = logits_end - logits_start
 
-    num_rejected = num_logits - num_sampled
+    query_start = tl.load(query_start_loc_ptr + batch_idx)
+    query_end = tl.load(query_start_loc_ptr + batch_idx + 1)
+    query_len = query_end - query_start
+
+    # For diffusion Commit-0 (num_sampled=0 on a decode step with
+    # draft tokens), reject the full query_len so nct stays constant.
+    # Without this, num_rejected = num_logits > query_len when bonus=1,
+    # causing nct_gpu to decrease on every Commit-0 step.
+    is_denoise = (num_sampled == 0) & (num_logits > 0) & (~is_chunked_prefilling)
+    num_rejected = tl.where(is_denoise, query_len, num_logits - num_sampled)
+
     num_rejected = tl.where(is_chunked_prefilling, 0, num_rejected)
     tl.store(num_rejected_ptr + batch_idx, num_rejected)
 
@@ -400,6 +411,7 @@ def get_num_sampled_and_rejected(
     cu_num_logits: torch.Tensor,
     idx_mapping: torch.Tensor,
     prefill_len: torch.Tensor,
+    query_start_loc: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     num_reqs = idx_mapping.shape[0]
     num_rejected = torch.empty_like(num_sampled)
@@ -410,6 +422,7 @@ def get_num_sampled_and_rejected(
         cu_num_logits,
         idx_mapping,
         prefill_len,
+        query_start_loc,
     )
     return num_sampled, num_rejected
 

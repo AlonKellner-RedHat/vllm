@@ -1375,10 +1375,20 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_token_ids = (
                 scheduler_output.scheduled_spec_decode_tokens.get(req_id)
             )
-            if scheduled_spec_token_ids and generated_token_ids:
+            if scheduled_spec_token_ids:
                 num_draft_tokens = len(scheduled_spec_token_ids)
-                num_accepted = len(generated_token_ids) - 1
+                is_diffusion = self.vllm_config.diffusion_config is not None
+                bonus = 0 if is_diffusion else 1
+                num_accepted = max(len(generated_token_ids) - bonus, 0)
                 num_rejected = num_draft_tokens - num_accepted
+                # For diffusion Commit-0: all tokens rejected
+                # For diffusion Commit-0, the plugin's update_from_output
+                # override handles nct authoritatively. Don't set
+                # num_rejected to the full scheduled count here — the base
+                # decrement would make nct go negative before the plugin
+                # corrects it, potentially triggering stop conditions.
+                if is_diffusion and num_accepted == 0:
+                    num_rejected = 0
                 # num_computed_tokens represents the number of tokens
                 # processed in the current step, considering scheduled
                 # tokens and rejections. If some tokens are rejected,

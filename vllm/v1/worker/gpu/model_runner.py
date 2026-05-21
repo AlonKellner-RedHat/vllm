@@ -1062,6 +1062,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 self.kv_cache_config,
             )
 
+            remapped = None
+            if isinstance(attn_metadata, dict):
+                remapped = attn_metadata.pop("remapped_slot_mappings", None)
+            if remapped is not None:
+                slot_mappings_by_layer = build_slot_mappings_by_layer(
+                    remapped, self.kv_cache_config
+                )
+
         inputs_embeds = None
         if self.supports_mm_inputs and self.is_first_pp_rank:
             # Run MM encoder (if needed) and get multimodal embeddings.
@@ -1286,6 +1294,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     def take_draft_token_ids(self) -> DraftTokenIds | None:
         custom = self.model_state.take_draft_token_ids()
         if custom is not None:
+            for i, req_id in enumerate(custom.req_ids):
+                req_idx = self.req_states.req_id_to_index.get(req_id)
+                if req_idx is not None:
+                    tokens = custom.draft_token_ids[i]
+                    n = min(len(tokens), self.req_states.draft_tokens.shape[1])
+                    self.req_states.draft_tokens[req_idx, :n] = torch.tensor(
+                        tokens[:n],
+                        dtype=self.req_states.draft_tokens.dtype,
+                        device=self.req_states.draft_tokens.device,
+                    )
             return custom
         return self.draft_tokens_handler.get_draft_tokens()
 

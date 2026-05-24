@@ -742,11 +742,17 @@ class VllmConfig:
                         {"LLaDA2ForCausalLM", "LLaDA2MoeModelLM"}
                     ):
                         self.diffusion_config = DiffusionConfig()
+                        self.model_config._use_non_causal = True
                         logger.info(
                             "Auto-detected diffusion model (archs=%s), "
                             "set DiffusionConfig(draft_length=%d)",
                             archs, self.diffusion_config.draft_length,
                         )
+
+            if self.diffusion_config is not None:
+                self.model_config._use_non_causal = True
+                if self.attention_config is not None:
+                    self.attention_config.use_non_causal = True
 
             self.parallel_config.is_moe_model = self.model_config.is_moe
 

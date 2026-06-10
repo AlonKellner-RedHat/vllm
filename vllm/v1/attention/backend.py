@@ -378,7 +378,7 @@ class CommonAttentionMetadata:
     block_table_tensor: torch.Tensor
     slot_mapping: torch.Tensor
 
-    causal: bool = True
+    causal: bool | torch.Tensor = True
 
     # Needed by FastPrefillAttentionBuilder
     logits_indices_padded: torch.Tensor | None = None
@@ -413,6 +413,9 @@ class CommonAttentionMetadata:
     _num_computed_tokens_cpu: torch.Tensor | None = None
 
     _num_computed_tokens_cache: torch.Tensor | None = None
+
+    dllm_prefix_lengths: list[int] | None = None
+    """Per-request prefix lengths for block diffusion virtual batch attention."""
 
     def batch_size(self) -> int:
         return self.seq_lens.shape[0]

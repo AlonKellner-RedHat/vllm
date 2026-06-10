@@ -292,7 +292,7 @@ class Worker(WorkerBase):
         num_ubatches = 2 if self.vllm_config.parallel_config.enable_dbo else 1
         init_workspace_manager(self.device, num_ubatches)
 
-        # Construct the model runner
+        # Construct the model runner.
         if self.use_v2_model_runner:
             from vllm.v1.worker.gpu.model_runner import (
                 GPUModelRunner as GPUModelRunnerV2,
@@ -1018,7 +1018,9 @@ class Worker(WorkerBase):
         # Release GPU resources held by the model runner so that memory
         # can be reclaimed when running in-process
         if model_runner := getattr(self, "model_runner", None):
-            model_runner.shutdown()
+            shutdown_fn = getattr(model_runner, "shutdown", None)
+            if callable(shutdown_fn):
+                shutdown_fn()
 
     def elastic_ep_execute(self, execute_method: str, *args, **kwargs):
         return self.elastic_ep_executor.execute(execute_method, *args, **kwargs)

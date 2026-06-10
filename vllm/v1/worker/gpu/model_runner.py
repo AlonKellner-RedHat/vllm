@@ -176,10 +176,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 self.use_aux_hidden_state_outputs = True
                 if self.use_pp:
                     raise ValueError("EAGLE3 with pipeline parallel is not supported.")
+        elif self.vllm_config.diffusion_config is not None:
+            self.num_speculative_steps = self.vllm_config.diffusion_config.num_speculative_tokens
+
+        self._num_bonus_tokens = 0 if self.vllm_config.diffusion_config is not None else 1
 
         # Draft tokens propagation - for spec-dec + struct outputs.
         self.draft_tokens_handler = DraftTokensHandler(self.device)
-        self.uniform_decode_query_len = 1 + self.num_speculative_steps
+        self.uniform_decode_query_len = self._num_bonus_tokens + self.num_speculative_steps
 
         # Pooling models.
         self.is_pooling_model = self.model_config.runner_type == "pooling"
@@ -214,7 +218,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 device=self.device,
                 req_states=self.req_states,
                 logprobs_mode=self.model_config.logprobs_mode,
-                num_speculative_tokens=self.num_speculative_steps + 1,
+                num_speculative_tokens=self.num_speculative_steps + self._num_bonus_tokens,
             )
             if self.speculative_config is not None:
                 self.rejection_sampler = RejectionSampler(
@@ -224,13 +228,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 )
             self.prompt_logprobs_worker = PromptLogprobsWorker(self.max_num_reqs)
             self.structured_outputs_worker = StructuredOutputsWorker(
-                max_num_logits=self.max_num_reqs * (self.num_speculative_steps + 1),
+                max_num_logits=self.max_num_reqs * (self.num_speculative_steps + self._num_bonus_tokens),
                 vocab_size=self.vocab_size,
                 device=self.device,
             )
 
         # For CUDA graphs, and will init cudagraph_manager after init_attn_backend.
-        self.decode_query_len = self.num_speculative_steps + 1
+        self.decode_query_len = self.num_speculative_steps + self._num_bonus_tokens
         self.cudagraph_manager: ModelCudaGraphManager | None = None
         # LoRA-related workers.
         self.lora_state = LoraState(max_num_reqs=self.max_num_reqs)
@@ -302,6 +306,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.model_state = init_model_state(
             self.vllm_config, self.model, self.encoder_cache, self.device
         )
+
+        # Allow ModelState to wrap or replace the sampler (e.g. diffusion)
+        if self.sampler is not None:
+            custom = self.model_state.custom_sampler(
+                self.sampler, self.vllm_config)
+            if custom is not None:
+                self.sampler, self.rejection_sampler = custom
+
         if self.is_pooling_model and self.is_last_pp_rank:
             self.pooling_runner = PoolingRunner(self.model)
         eplb_models_added |= self.eplb.maybe_register_model(
@@ -624,6 +636,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if self.prompt_logprobs_worker is not None:
             self.prompt_logprobs_worker.remove_request(req_id)
         self.lora_state.remove_request(req_id)
+        self.model_state.remove_request(req_id)
         return True
 
     def finish_requests(self, scheduler_output: SchedulerOutput) -> None:
@@ -685,14 +698,24 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.sampler.apply_staged_writes()
 
     def update_requests(self, scheduler_output: SchedulerOutput) -> None:
-        # Add new blocks for the existing requests.
+        # Add new blocks and propagate authoritative nct from scheduler.
         reqs = scheduler_output.scheduled_cached_reqs
-        for req_new_block_ids, req_id in zip(reqs.new_block_ids, reqs.req_ids):
+        num_computed_tokens_np = self.req_states.num_computed_tokens_np
+        for req_id, num_computed_tokens, req_new_block_ids in zip(
+            reqs.req_ids, reqs.num_computed_tokens, reqs.new_block_ids,
+        ):
+            req_index = self.req_states.req_id_to_index[req_id]
+            num_computed_tokens_np[req_index] = num_computed_tokens
             if req_new_block_ids is not None:
-                req_index = self.req_states.req_id_to_index[req_id]
                 self.block_tables.append_block_ids(
                     req_index, req_new_block_ids, overwrite=False
                 )
+        # Update prefill tracking from authoritative nct.
+        np.minimum(
+            num_computed_tokens_np,
+            self.req_states.prefill_len.np,
+            out=self.req_states.num_computed_prefill_tokens,
+        )
 
     def prepare_inputs(
         self, scheduler_output: SchedulerOutput, batch_desc: BatchExecutionDescriptor
@@ -715,6 +738,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
+        bonus = self._num_bonus_tokens
         if not draft_tokens:
             # No draft token scheduled (common case).
             total_num_draft_tokens = 0
@@ -734,15 +758,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 count=num_reqs,
             )
             total_num_draft_tokens = int(num_draft_tokens.sum())
-            total_num_logits = num_reqs + total_num_draft_tokens
+            total_num_logits = num_reqs * bonus + total_num_draft_tokens
 
-            num_logits = num_draft_tokens + 1
+            num_logits = num_draft_tokens + bonus
             cu_num_logits_np = np.empty(num_reqs + 1, dtype=np.int32)
             cu_num_logits_np[0] = 0
             np.cumsum(num_logits, out=cu_num_logits_np[1:])
             cu_num_logits = async_copy_to_gpu(cu_num_logits_np, device=self.device)
 
-            max_expand_len = self.num_speculative_steps + 1
+            max_expand_len = self.num_speculative_steps + bonus
             expanded_idx_mapping, expanded_local_pos = expand_idx_mapping(
                 idx_mapping, total_num_logits, cu_num_logits, max_expand_len
             )
@@ -807,6 +831,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.req_states.draft_tokens,
             cu_num_logits,
             total_num_logits,
+            num_bonus_tokens=bonus,
         )
 
         # CPU upper bound on seq_lens; padded entries left at zero.
@@ -887,18 +912,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 grammar_output.grammar_bitmask,
             )
 
-        if input_batch.num_draft_tokens == 0:
-            # No draft tokens (common case).
+        if input_batch.num_draft_tokens == 0 or self.rejection_sampler is None:
             assert self.sampler is not None
             sampler_output = self.sampler(logits, input_batch)
         else:
-            # Rejection sampling for spec decoding.
-            assert self.rejection_sampler is not None
             assert self.speculator is not None
             sampler_output = self.rejection_sampler(
                 logits,
                 input_batch,
-                # Draft logits are needed for probabilistic rejection sampling.
                 self.speculator.draft_logits,
             )
 
@@ -910,6 +931,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             input_batch.cu_num_logits,
             input_batch.idx_mapping,
             self.req_states.prefill_len.gpu,
+            input_batch.query_start_loc,
         )
         return sampler_output, num_sampled, num_rejected
 
@@ -939,17 +961,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.req_states.total_len.gpu,
         )
 
-        # Update the number of computed prefill tokens.
-        idx_mapping_np = input_batch.idx_mapping_np
-        computed_prefill = self.req_states.num_computed_prefill_tokens
-        computed_prefill[idx_mapping_np] += input_batch.num_scheduled_tokens
-        np.minimum(
-            computed_prefill, self.req_states.prefill_len.np, out=computed_prefill
-        )
-        # Advance the CPU mirror optimistically (assume all scheduled accepted).
-        self.req_states.num_computed_tokens_np[idx_mapping_np] += (
-            input_batch.num_scheduled_tokens
-        )
+        # CPU mirror nct is now set authoritatively in update_requests()
+        # from the scheduler's value. No optimistic increment needed here.
 
     @torch.inference_mode()
     def execute_model(
@@ -960,6 +973,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         skip_attn_for_dummy_run: bool = False,
         is_profile: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        self.model_state.before_step(scheduler_output, dummy_run=dummy_run)
+
         if not dummy_run:
             # Update the request states.
             self.finish_requests(scheduler_output)
@@ -1265,12 +1280,21 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
             self.draft_tokens_handler.set_draft_tokens(input_batch, draft_tokens)
+        elif self.num_speculative_steps > 0 and self.use_async_scheduling:
+            # dLLM: no speculator but has spec tokens. Populate the
+            # draft_tokens_handler so the async scheduler can read
+            # draft token counts for scheduling.
+            self.draft_tokens_handler.req_ids = list(input_batch.req_ids)
+            self.draft_tokens_handler.num_draft_tokens = self.num_speculative_steps
 
         if self.use_async_scheduling:
             return async_output
         return async_output.get_output()
 
     def take_draft_token_ids(self) -> DraftTokenIds | None:
+        custom = self.model_state.take_draft_token_ids()
+        if custom is not None:
+            return custom
         return self.draft_tokens_handler.get_draft_tokens()
 
     @torch.inference_mode()
@@ -1321,17 +1345,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             input_batch.query_start_loc,
         )
 
-        # Update the number of computed prefill tokens.
-        idx_mapping_np = input_batch.idx_mapping_np
-        computed_prefill = self.req_states.num_computed_prefill_tokens
-        computed_prefill[idx_mapping_np] += input_batch.num_scheduled_tokens
-        np.minimum(
-            computed_prefill, self.req_states.prefill_len.np, out=computed_prefill
-        )
-        # Advance the CPU mirror optimistically (assume all scheduled accepted).
-        self.req_states.num_computed_tokens_np[idx_mapping_np] += (
-            input_batch.num_scheduled_tokens
-        )
+        # CPU mirror nct is now set authoritatively in update_requests()
+        # from the scheduler's value. No optimistic increment needed here.
 
     ########### EPLB methods start ###########
     @property
